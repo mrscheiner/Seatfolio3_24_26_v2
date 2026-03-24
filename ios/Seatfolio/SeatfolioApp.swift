@@ -8,6 +8,7 @@ struct SeatfolioApp: App {
         WindowGroup {
             ContentView()
                 .environment(store)
+                .preferredColorScheme(.dark)
         }
     }
 }
