@@ -1,0 +1,585 @@
+import SwiftUI
+
+struct HomeView: View {
+        // @State private var showMenu = false (removed hamburger menu)
+    @Environment(DataStore.self) private var store
+    @State private var showAddPass = false
+    @State private var showEditPass = false
+    @State private var showAllSales = false
+
+    private var pass: SeasonPass? { store.activePass }
+    private var theme: TeamTheme { store.currentTheme }
+
+    private var recentSales: [Sale] {
+        guard let pass else { return [] }
+        return pass.sales.sorted { $0.soldDate > $1.soldDate }
+    }
+
+    private var totalSeats: Int {
+        guard let pass else { return 0 }
+        return pass.seatPairs.count * pass.games.count * 2
+    }
+
+    private var seatsSold: Int {
+        guard let pass else { return 0 }
+        return pass.sales.count * 2
+    }
+
+    private var avgPrice: Double {
+        guard let pass, !pass.sales.isEmpty else { return 0 }
+        return pass.totalRevenue / Double(pass.sales.count)
+    }
+
+    private var pendingCount: Int {
+        guard let pass else { return 0 }
+        return pass.sales.filter { $0.status == .pending }.count
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 0) {
+                    if store.seasonPasses.count > 1 {
+                        swipePassHeader
+                    } else {
+                        heroHeader
+                    }
+
+                    VStack(spacing: 10) {
+                        statsGrid
+
+                        if store.isLoadingSchedule {
+                            loadingIndicator
+                        } else if let error = store.scheduleError {
+                            errorBanner(error)
+                        }
+
+                        if recentSales.isEmpty {
+                            emptyState
+                        } else {
+                            recentSalesSection
+                        }
+                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                    BottomLogoView()
+                }
+            }
+            .background(Color(.systemGroupedBackground))
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showAddPass = true }) {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            // .overlay(alignment: .topLeading) { ... } (removed hamburger menu)
+            .sheet(isPresented: $showAddPass) {
+                SetupView()
+            }
+            .sheet(isPresented: $showEditPass) {
+                if let pass = store.activePass {
+                    EditPassView(pass: pass)
+                }
+            }
+            .sheet(isPresented: $showAllSales) {
+                AllSalesView(sales: recentSales, pass: pass, theme: theme)
+            }
+
+            // Hamburger menu overlay removed
+
+        }
+    }
+
+    private var seatfolioLogo: some View {
+        Text("Seatfolio")
+            .font(.system(size: 20, weight: .bold, design: .rounded))
+            .italic()
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [theme.textOnPrimary, theme.secondary.opacity(0.9)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
+    }
+
+    private var swipePassHeader: some View {
+        VStack(spacing: 0) {
+            TabView(selection: Binding(
+                get: { store.activePassIndex },
+                set: { newIndex in
+                    store.activePassIndex = newIndex
+                }
+            )) {
+                ForEach(Array(store.seasonPasses.enumerated()), id: \.element.id) { index, p in
+                    passHeaderCard(for: p)
+                        .tag(index)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .automatic))
+            .frame(height: 200)
+
+            Text("Swipe to switch passes")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.8))
+                .padding(.bottom, 6)
+        }
+        .background(
+            LinearGradient(
+                stops: [
+                    .init(color: theme.primary, location: 0),
+                    .init(color: theme.secondary.opacity(0.7), location: 1.0)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+    }
+
+    private func passHeaderCard(for p: SeasonPass) -> some View {
+        let pTheme = TeamThemeProvider.theme(for: p.teamId)
+
+        return Button {
+            showEditPass = true
+        } label: {
+            VStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    TeamLogoView(
+                        teamId: p.teamId,
+                        leagueId: p.leagueId,
+                        size: 40
+                    )
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(p.displayTeamName)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                        Text("\(p.seasonLabel) Season")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text("\(p.sales.count) sales • \(p.games.count) games")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Total Revenue")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text(p.totalRevenue, format: .currency(code: "USD"))
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .minimumScaleFactor(0.6)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("Net P/L")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text(p.netProfitLoss, format: .currency(code: "USD"))
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                    }
+                }
+            }
+            .padding(6)
+            .background(
+                LinearGradient(
+                    stops: [
+                        .init(color: pTheme.primary, location: 0),
+                        .init(color: pTheme.secondary.opacity(0.7), location: 1.0)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var heroHeader: some View {
+        Button {
+            showEditPass = true
+        } label: {
+            VStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    TeamLogoView(
+                        teamId: pass?.teamId ?? "",
+                        leagueId: pass?.leagueId ?? "",
+                        size: 40
+                    )
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(pass?.displayTeamName ?? "No Pass")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                        Text("\(pass?.seasonLabel ?? "") Season")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                        if let pass {
+                            Text("\(pass.sales.count) sales • \(pass.games.count) games")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Total Revenue")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text(pass?.totalRevenue ?? 0, format: .currency(code: "USD"))
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .minimumScaleFactor(0.6)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("Net P/L")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                        Text(pass?.netProfitLoss ?? 0, format: .currency(code: "USD"))
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                    }
+                }
+            }
+            .padding(6)
+            .background(
+                LinearGradient(
+                    stops: [
+                        .init(color: theme.primary, location: 0),
+                        .init(color: theme.secondary.opacity(0.7), location: 1.0)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var statsGrid: some View {
+        LazyVGrid(columns: [
+            GridItem(.flexible(), spacing: 10),
+            GridItem(.flexible(), spacing: 10)
+        ], spacing: 10) {
+            StatCard(
+                icon: "dollarsign.circle.fill",
+                iconColor: .green,
+                title: "Revenue",
+                value: (pass?.totalRevenue ?? 0).formatted(.currency(code: "USD").precision(.fractionLength(0))),
+                subtitle: "\(seatsSold) seats sold"
+            )
+
+            StatCard(
+                icon: "chair.lounge.fill",
+                iconColor: theme.primary,
+                title: "Seats Sold",
+                value: "\(seatsSold)",
+                subtitle: "of \(totalSeats) available"
+            )
+
+            StatCard(
+                icon: "chart.line.uptrend.xyaxis",
+                iconColor: .blue,
+                title: "Avg Price",
+                value: avgPrice.formatted(.currency(code: "USD").precision(.fractionLength(0))),
+                subtitle: "per pair"
+            )
+
+            StatCard(
+                icon: "clock.fill",
+                iconColor: .red,
+                title: "Pending",
+                value: "\(pendingCount)",
+                subtitle: "payments"
+            )
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var loadingIndicator: some View {
+        SpinningLogoView(size: 48, message: "Loading schedule...")
+            .padding(24)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(.rect(cornerRadius: 12))
+            .padding(.horizontal, 16)
+    }
+
+    private func errorBanner(_ error: String) -> some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Schedule Error")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    Task { await store.fetchScheduleFromAPI() }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 12))
+        .padding(.horizontal, 16)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "ticket")
+                .font(.system(size: 44))
+                .foregroundStyle(.tertiary)
+            Text("No Sales Yet")
+                .font(.title3.weight(.semibold))
+            Text("Record a sale from the Schedule tab to start tracking.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.vertical, 40)
+        .padding(.horizontal)
+    }
+
+    private var recentSalesSection: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Recent Sales")
+                    .font(.title3.bold())
+                Spacer()
+                if recentSales.count > 5 {
+                    Button {
+                        showAllSales = true
+                    } label: {
+                        Text("View All (\(recentSales.count))")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(theme.primary)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+
+            ForEach(Array(recentSales.prefix(10))) { sale in
+                RecentSaleCard(
+                    sale: sale,
+                    leagueId: pass?.leagueId ?? "",
+                    games: pass?.games ?? [],
+                    theme: theme
+                )
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
+struct StatCard: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let value: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: icon)
+                .font(.body)
+                .foregroundStyle(iconColor)
+
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.primary)
+
+            Text(value)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+
+            Text(subtitle)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+    }
+}
+
+struct RecentSaleCard: View {
+    let sale: Sale
+    let leagueId: String
+    let games: [Game]
+    let theme: TeamTheme
+
+    private var game: Game? {
+        games.first { $0.id == sale.gameId }
+    }
+
+    private var fullOpponentName: String {
+        let effectiveLeague = sale.leagueId.isEmpty ? leagueId : sale.leagueId
+        if !sale.opponentAbbr.isEmpty {
+            let name = LeagueData.teamNameForAPIAbbr(sale.opponentAbbr, leagueId: effectiveLeague)
+            if name != sale.opponentAbbr { return name }
+        }
+        if let game, !game.opponentAbbr.isEmpty {
+            let name = LeagueData.teamNameForAPIAbbr(game.opponentAbbr, leagueId: effectiveLeague)
+            if name != game.opponentAbbr { return name }
+        }
+        return sale.opponent.isEmpty ? (game?.opponent ?? "Unknown") : sale.opponent
+    }
+
+    private var effectiveLeague: String {
+        sale.leagueId.isEmpty ? leagueId : sale.leagueId
+    }
+
+    private var effectiveAbbr: String {
+        if !sale.opponentAbbr.isEmpty { return sale.opponentAbbr }
+        if let game, !game.opponentAbbr.isEmpty { return game.opponentAbbr }
+        return ""
+    }
+
+    private var effectiveName: String {
+        sale.opponent.isEmpty ? (game?.opponent ?? "") : sale.opponent
+    }
+
+    private var resolvedTeamId: String {
+        let abbr = effectiveAbbr
+        let lid = effectiveLeague
+        if !abbr.isEmpty && !lid.isEmpty {
+            if let team = LeagueData.teamByAPIAbbr(abbr, leagueId: lid) {
+                return team.id
+            }
+        }
+        let name = effectiveName
+        if !name.isEmpty && !lid.isEmpty {
+            if let league = LeagueData.league(for: lid) {
+                let lowered = name.lowercased()
+                if let team = league.teams.first(where: {
+                    lowered.contains($0.name.lowercased()) ||
+                    $0.name.lowercased().contains(lowered) ||
+                    "\($0.city) \($0.name)".lowercased().contains(lowered) ||
+                    lowered.contains("\($0.city) \($0.name)".lowercased())
+                }) {
+                    return team.id
+                }
+            }
+        }
+        return ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let game {
+                Text("Game #\(game.displayLabel) • \(game.formattedDate)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(theme.primary)
+            }
+
+            HStack(spacing: 12) {
+                TeamLogoView(
+                    teamId: resolvedTeamId,
+                    apiAbbr: effectiveAbbr,
+                    teamName: effectiveName,
+                    leagueId: effectiveLeague,
+                    size: 40
+                )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(fullOpponentName)
+                        .font(.headline)
+                    Text("Sec \(sale.section) • Row \(sale.row) • Seats \(sale.seats)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    Text(sale.price, format: .currency(code: "USD"))
+                        .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+
+                    SaleStatusBadge(status: sale.status)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+    }
+
+    private var opponentFallbackIcon: some View {
+        Circle().fill(Color(.tertiarySystemFill))
+            .frame(width: 40, height: 40)
+            .overlay {
+                Image(systemName: "sportscourt.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+            }
+    }
+}
+
+struct SaleStatusBadge: View {
+    let status: SaleStatus
+
+    var body: some View {
+        Text(status.rawValue)
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(backgroundColor)
+            .foregroundStyle(foregroundColor)
+            .clipShape(Capsule())
+    }
+
+    private var backgroundColor: Color {
+        switch status {
+        case .paid: return Color.green
+        case .pending: return Color.red
+        case .perSeat: return Color.orange
+        }
+    }
+
+    private var foregroundColor: Color {
+        return .white
+    }
+}
